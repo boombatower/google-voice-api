@@ -1,0 +1,125 @@
+#!/usr/bin/php -q
+<?php
+// http://adriel.dynalias.com/blog/?p=252
+
+require_once 'google-voice.inc';
+
+$args = $_SERVER['argv'];
+if (empty($args) || count($args) == 1 || $args[1] == '--help') {
+  help();
+}
+
+function help() {
+  $command = basename($_SERVER['argv'][0]);
+  echo "A utility for interacting with Google Voice API.
+
+Usage: $command ACTION [ARGUMENTS]
+      $command --help
+
+Commands:
+  contacts
+    List all known contacts.
+  sms-messages (sm)
+    Display the most recent SMS messages.
+  sms-send (ss) NAME|NUMBER MESSAGE
+    Send an SMS text message.
+";
+  exit;
+}
+
+$home = trim(shell_exec('echo $HOME'));
+$config_file = "$home/.google-voice";
+
+// Attempt to load configuration if it exists.
+$config = array();
+if (file_exists($config_file)) {
+  $config = parse_ini_file($config_file);
+  if (empty($config['user']) || empty($config['pass'])) {
+    echo "You must fill in user and pass in ~/.google-voice.\n";
+  }
+}
+else {
+  file_put_contents($config_file, "; Google Voice API configuration file.
+
+; Login information.
+user=
+pass=
+
+; Contacts
+; contacts[john] = 1234567890
+; contacts[foo] = 0987654321
+");
+  echo "A configuration file [$config_file] has been generated, please fill it in.\n";
+  exit;
+}
+
+switch ($command = $args[1]) {
+  case 'contacts':
+    foreach ($config['contacts'] as $name => $number) {
+      echo "$name: $number\n";
+    }
+    break;
+  case 'sms-messages':
+  case 'sm':
+    foreach (setup()->sms_messages() as $conversation) {
+      echo "{$conversation['subject']}\n";
+      echo implode('', array_fill(0, strlen($conversation['subject']), '-')) . "\n";
+      foreach ($conversation['messages'] as $message) {
+        echo " > ({$message['time']}) {$message['from']}: {$message['message']}\n";
+      }
+      echo "\n";
+    }
+    break;
+  case 'sms-send':
+  case 'ss': {
+    // Ensure that both a user and message are specified.
+    if (count($args) != 4) {
+      // Use STDIN as message if available.
+      if (!empty($args[2]) && ($message = trim(file_get_contents('php://stdin')))) {
+        $args[3] = $message;
+      }
+      else {
+        echo "You must specify a recipient and message.\n";
+          exit;
+        }
+      }
+
+      $to = $args[2];
+      $message = $args[3];
+
+      // Ensure that the user is in the predefined list of numbers or is a number.
+      if (is_numeric($to) && strlen($to) == 10) {
+        $number = $to;
+        echo "Sending text to $to...\n";
+      }
+      elseif (!empty($config['contacts'][$to])) {
+        $number = $config['contacts'][$to];
+        echo "Sending text to $to ($number)...\n";
+      }
+      else {
+        echo "Invalid user/number to send to: $to\n";
+        exit;
+      }
+
+      if (setup()->sms_send($number, $message)) {
+        echo "Message successfully sent.\n";
+      }
+      else {
+        echo "Message failed to send.\n";
+      }
+      break;
+    }
+    default:
+      echo "Invalid command [$command].\n";
+}
+
+function setup() {
+  global $config;
+
+  $voice = new google_voice();
+  if (!$voice->login($config['user'], $config['pass'])) {
+    echo "Failed to login.\n";
+    exit;
+  }
+  return $voice;
+}
